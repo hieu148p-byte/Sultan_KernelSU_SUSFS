@@ -24,18 +24,19 @@ jobs:
       matrix:
         features: ["stock", "wksu-susfs"]
     steps:
-      #- name: Maximize Build Space
-      #  uses: AdityaGarg8/remove-unwanted-software@v5
-      #  with:
-      #    remove-dotnet: 'true'          # Frees ~2 GB
-      #    remove-android: 'true'         # Frees ~9 GB
-      #    remove-haskell: 'true'         # Frees ~5.2 GB
-      #    remove-codeql: 'true'          # Frees ~5.4 GB
-      #    remove-docker-images: 'true'   # Frees ~3.2 GB
-      #    remove-large-packages: 'true'  # Frees ~3.1 GB
-      #    remove-swapfile: 'true'        # Frees ~4 GB
-      #    remove-cached-tools: 'false'   # Avoid unless confirmed safe
-      #    verbose: 'true'                # Enable detailed logging
+      - name: Maximize Build Space
+        if: matrix.features == 'wksu-susfs'
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'          # Frees ~2 GB
+          remove-android: 'true'         # Frees ~9 GB
+          remove-haskell: 'true'         # Frees ~5.2 GB
+          remove-codeql: 'true'          # Frees ~5.4 GB
+          remove-docker-images: 'true'   # Frees ~3.2 GB
+          remove-large-packages: 'true'  # Frees ~3.1 GB
+          remove-swapfile: 'true'        # Frees ~4 GB
+          remove-cached-tools: 'false'   # Avoid unless confirmed safe
+          verbose: 'true'                # Enable detailed logging
 
       - name: Download and extract GCC 14.2.0 toolchain
         run: |
@@ -136,6 +137,33 @@ jobs:
           echo "# Mountify Support" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_TMPFS_XATTR=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+
+      - name: Install pahole for BTF generation
+        if: matrix.features == 'wksu-susfs'
+        run: sudo apt-get update && sudo apt-get install -y dwarves
+
+      - name: Configure TLSGhost Build-T tracing (BTF + uprobe + ftrace)
+        shell: bash
+        if: matrix.features == 'wksu-susfs'
+        run: |
+          cd "$CONFIG"
+          cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
+          # --- TLSGhost Build-T: kernel tracing for RASP analysis ---
+          CONFIG_DEBUG_INFO_BTF=y
+          CONFIG_DEBUG_INFO_BTF_MODULES=y
+          CONFIG_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_UPROBES=y
+          CONFIG_UPROBE_EVENTS=y
+          CONFIG_FUNCTION_TRACER=y
+          CONFIG_DYNAMIC_FTRACE=y
+          CONFIG_FTRACE_SYSCALLS=y
+          CONFIG_HAVE_EBPF_JIT=y
+          CONFIG_BPF_SYSCALL=y
+          CONFIG_BPF_EVENTS=y
+          CONFIG_BPF_JIT=y
+          CONFIG_DEBUG_FS=y
+          EOF
 
       - name: Configure Networking
         if: false
