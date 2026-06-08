@@ -170,10 +170,14 @@ jobs:
           CONFIG_DEBUG_KERNEL=y
           CONFIG_FTRACE=y
           CONFIG_TRACING=y
-          # ftrace + kprobe + uprobe dynamic events (uprobe = the libverimatrix tracer)
-          CONFIG_FUNCTION_TRACER=y
-          CONFIG_DYNAMIC_FTRACE=y
-          CONFIG_FTRACE_SYSCALLS=y
+          # uprobe dynamic events (THE libverimatrix tracer). NOTE: deliberately NO
+          # FUNCTION_TRACER / DYNAMIC_FTRACE — the kernel-function tracer is not needed
+          # to uprobe a userspace lib, and with this GCC 14.2 cross-toolchain it breaks
+          # the vmlinux link: MCOUNT_REC() emits `ftrace_ops_list_func =
+          # arch_ftrace_ops_list_func;` (asm-generic/vmlinux.lds.h, guarded by
+          # FTRACE_MCOUNT_RECORD||FUNCTION_TRACER) but GCC never defines that arm64
+          # symbol -> "undefined symbol arch_ftrace_ops_list_func" at LD .tmp_vmlinux.btf
+          # (build #3). UPROBE_EVENTS alone select's TRACING -> tracefs, which is all we need.
           CONFIG_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
           CONFIG_UPROBES=y
@@ -287,7 +291,9 @@ jobs:
           bash ./scripts/config --file "$KCONF" \
             -d WERROR \
             -e DEBUG_KERNEL \
-            -e FTRACE -e FUNCTION_TRACER -e DYNAMIC_FTRACE -e FTRACE_SYSCALLS \
+            -e FTRACE \
+            -d FUNCTION_TRACER -d DYNAMIC_FTRACE -d FTRACE_SYSCALLS \
+            -d FUNCTION_GRAPH_TRACER -d FTRACE_MCOUNT_RECORD \
             -e KPROBES -e KPROBE_EVENTS -e UPROBES -e UPROBE_EVENTS \
             -d DEBUG_INFO_NONE -e DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT \
             -e DEBUG_INFO_BTF -e DEBUG_INFO_BTF_MODULES \
@@ -305,12 +311,18 @@ jobs:
           # and it has an unmet dep on this defconfig. It's enabled best-effort below and
           # never gated on (the 1st run failed only because the gate over-required it).
           FAIL=0
-          for s in CONFIG_FTRACE CONFIG_TRACING CONFIG_FUNCTION_TRACER \
+          for s in CONFIG_FTRACE CONFIG_TRACING \
                    CONFIG_UPROBES CONFIG_UPROBE_EVENTS \
                    CONFIG_DEBUG_INFO CONFIG_DEBUG_INFO_BTF; do
             if grep -q "^$s=y" "$KCONF"; then echo "OK   $s=y"; else echo "FAIL $s NOT =y"; FAIL=1; fi
           done
-          for s in CONFIG_KPROBE_EVENTS CONFIG_DYNAMIC_FTRACE CONFIG_FTRACE_SYSCALLS CONFIG_BPF_EVENTS; do
+          # MUST be OFF: the kernel function tracer breaks the vmlinux link with this GCC
+          # cross-toolchain (undefined arch_ftrace_ops_list_func at LD .tmp_vmlinux.btf,
+          # build #3). Guard against accidental re-enable.
+          for s in CONFIG_FUNCTION_TRACER CONFIG_DYNAMIC_FTRACE CONFIG_FTRACE_MCOUNT_RECORD; do
+            if grep -q "^$s=y" "$KCONF"; then echo "FAIL $s is =y (must be OFF — breaks vmlinux link)"; FAIL=1; else echo "OK   $s off"; fi
+          done
+          for s in CONFIG_KPROBE_EVENTS CONFIG_BPF_EVENTS; do
             grep -q "^$s=y" "$KCONF" && echo "okk  $s=y (best-effort)" || echo "warn $s not =y (best-effort, non-fatal)"
           done
           if [ "$FAIL" != "0" ]; then
