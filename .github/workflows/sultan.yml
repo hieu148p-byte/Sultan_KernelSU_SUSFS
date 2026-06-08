@@ -297,11 +297,18 @@ jobs:
           echo "===== tracing/BTF-relevant final .config ====="
           grep -E 'FTRACE|TRACING|UPROBE|KPROBE|DEBUG_INFO|BTF|BPF_|DEBUG_KERNEL|DWARF|LOCALVERSION' "$KCONF" | sort || true
           echo "=============================================="
+          # REQUIRED (gate): the userspace-uprobe + BTF goal. KPROBE_EVENTS is deliberately
+          # NOT here — kprobe is kernel-function tracing, not needed to uprobe libverimatrix,
+          # and it has an unmet dep on this defconfig. It's enabled best-effort below and
+          # never gated on (the 1st run failed only because the gate over-required it).
           FAIL=0
           for s in CONFIG_FTRACE CONFIG_TRACING CONFIG_FUNCTION_TRACER \
-                   CONFIG_UPROBES CONFIG_UPROBE_EVENTS CONFIG_KPROBE_EVENTS \
+                   CONFIG_UPROBES CONFIG_UPROBE_EVENTS \
                    CONFIG_DEBUG_INFO CONFIG_DEBUG_INFO_BTF; do
             if grep -q "^$s=y" "$KCONF"; then echo "OK   $s=y"; else echo "FAIL $s NOT =y"; FAIL=1; fi
+          done
+          for s in CONFIG_KPROBE_EVENTS CONFIG_DYNAMIC_FTRACE CONFIG_FTRACE_SYSCALLS CONFIG_BPF_EVENTS; do
+            grep -q "^$s=y" "$KCONF" && echo "okk  $s=y (best-effort)" || echo "warn $s not =y (best-effort, non-fatal)"
           done
           if [ "$FAIL" != "0" ]; then
             echo "::error::Required tracing/BTF configs did not land in .config — aborting before the long build."
