@@ -157,17 +157,30 @@ jobs:
           cd "$CONFIG"
           cat >> "./arch/arm64/configs/${{ inputs.codename }}_defconfig" << 'EOF'
           # --- TLSGhost Build-T: kernel tracing for RASP analysis ---
+          # Master switches FIRST. The inner tracers (FUNCTION_TRACER / UPROBE_EVENTS /
+          # KPROBE_EVENTS) all live under `if FTRACE`, and the DWARF "Debug information"
+          # choice (the BTF prerequisite) depends on DEBUG_KERNEL. Without these two,
+          # a raw defconfig-append silently DROPS every symbol below — that was the
+          # 06-08 bug: tracefs never registered (it is obj-$(CONFIG_TRACING), and
+          # TRACING is only select'd by a tracer that is gated by FTRACE).
           CONFIG_WERROR=n
-          CONFIG_DEBUG_INFO_BTF=y
-          CONFIG_DEBUG_INFO_BTF_MODULES=y
+          CONFIG_DEBUG_KERNEL=y
+          CONFIG_FTRACE=y
+          CONFIG_TRACING=y
+          # ftrace + kprobe + uprobe dynamic events (uprobe = the libverimatrix tracer)
+          CONFIG_FUNCTION_TRACER=y
+          CONFIG_DYNAMIC_FTRACE=y
+          CONFIG_FTRACE_SYSCALLS=y
           CONFIG_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
           CONFIG_UPROBES=y
           CONFIG_UPROBE_EVENTS=y
-          CONFIG_FUNCTION_TRACER=y
-          CONFIG_DYNAMIC_FTRACE=y
-          CONFIG_FTRACE_SYSCALLS=y
-          CONFIG_HAVE_EBPF_JIT=y
+          # Full DWARF debug info (prereq for BTF; BTF forbids REDUCED) -> BTF for eBPF
+          # CO-RE (/sys/kernel/btf/vmlinux). TOOLCHAIN_DEFAULT is GCC-safe (!CC_IS_CLANG).
+          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+          CONFIG_DEBUG_INFO_BTF=y
+          CONFIG_DEBUG_INFO_BTF_MODULES=y
+          # BPF
           CONFIG_BPF_SYSCALL=y
           CONFIG_BPF_EVENTS=y
           CONFIG_BPF_JIT=y
@@ -238,18 +251,65 @@ jobs:
           cd "$CONFIG"
 
           echo "Running sed commands..."
-          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          # Build-T marker: distinct LOCALVERSION so /proc/config.gz + the early dmesg
+          # banner PROVE the trace kernel booted (susfs set_uname can re-spoof the syscall
+          # back to -Sultan-Wild for RASP, but the built-in config string can't be hidden).
+          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild-T"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
 
           sed -i '/echo "+"$/d' scripts/setlocalversion
 
 
       - name: Build the Kernel
+        shell: bash
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc LOCALVERSION_AUTO=0 -j$(nproc --all)
+          GCCBIN=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin
+          MK="make CROSS_COMPILE=$GCCBIN/aarch64-linux- CC=$GCCBIN/aarch64-linux-gcc"
+
+          # 1) Base .config from the tracing-augmented defconfig
+          $MK -j$(nproc --all) ${{ inputs.codename }}_defconfig
+
+          # 2) Locate .config (this kernel builds with an implicit O=out)
+          KCONF=out/.config
+          [ -f "$KCONF" ] || KCONF=.config
+          [ -f "$KCONF" ] || KCONF=$(find . -maxdepth 4 -name .config | head -1)
+          echo "Using .config at: $KCONF"
+
+          # 3) AUTHORITATIVE force-enable: scripts/config rewrites the symbol lines,
+          #    olddefconfig then re-resolves dependencies. This is order-independent and
+          #    survives the `if FTRACE` gate + the exclusive DWARF choice that a raw
+          #    defconfig-append cannot (belt to the fragment's suspenders above).
+          bash ./scripts/config --file "$KCONF" \
+            -d WERROR \
+            -e DEBUG_KERNEL \
+            -e FTRACE -e FUNCTION_TRACER -e DYNAMIC_FTRACE -e FTRACE_SYSCALLS \
+            -e KPROBES -e KPROBE_EVENTS -e UPROBES -e UPROBE_EVENTS \
+            -d DEBUG_INFO_NONE -e DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT \
+            -e DEBUG_INFO_BTF -e DEBUG_INFO_BTF_MODULES \
+            -e BPF_SYSCALL -e BPF_EVENTS -e BPF_JIT \
+            -d DEBUG_INFO_REDUCED -d DEBUG_INFO_SPLIT -d GCC_PLUGIN_RANDSTRUCT
+          $MK olddefconfig
+
+          # 4) VERIFY-OR-FAIL *before* the ~20-min build. A wrong config now costs 2 min
+          #    in the CI log instead of a full build + repack + fastboot + reboot cycle.
+          echo "===== tracing/BTF-relevant final .config ====="
+          grep -E 'FTRACE|TRACING|UPROBE|KPROBE|DEBUG_INFO|BTF|BPF_|DEBUG_KERNEL|DWARF|LOCALVERSION' "$KCONF" | sort || true
+          echo "=============================================="
+          FAIL=0
+          for s in CONFIG_FTRACE CONFIG_TRACING CONFIG_FUNCTION_TRACER \
+                   CONFIG_UPROBES CONFIG_UPROBE_EVENTS CONFIG_KPROBE_EVENTS \
+                   CONFIG_DEBUG_INFO CONFIG_DEBUG_INFO_BTF; do
+            if grep -q "^$s=y" "$KCONF"; then echo "OK   $s=y"; else echo "FAIL $s NOT =y"; FAIL=1; fi
+          done
+          if [ "$FAIL" != "0" ]; then
+            echo "::error::Required tracing/BTF configs did not land in .config — aborting before the long build."
+            exit 1
+          fi
+
+          # 5) Build
+          $MK LOCALVERSION_AUTO=0 -j$(nproc --all)
 
       - name: Copy Images
         run: |
