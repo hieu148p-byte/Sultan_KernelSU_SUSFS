@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features: ["stock", "wksu-susfs"]
+        features: ["wksu-susfs"]
     steps:
       - name: Maximize Build Space
         if: matrix.features == 'wksu-susfs'
@@ -110,7 +110,7 @@ jobs:
           patch -p1 < sys.c_fix.patch
 
           cd KernelSU-Next
-          cp ${{ github.workspace }}/kernel_patches/wild/ksun-293ca01-susfs-v2.1.0-a14-6.1-ef16cbce.patch ./
+          cp ${{ github.workspace }}/kernel_patches/wild/archived/ksun-293ca01-susfs-v2.1.0-a14-6.1-ef16cbce.patch ./
           patch -p1 < ksun-293ca01-susfs-v2.1.0-a14-6.1-ef16cbce.patch
 
       - name: Configure KernelSU
