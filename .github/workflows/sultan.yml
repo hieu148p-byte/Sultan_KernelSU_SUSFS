@@ -146,9 +146,12 @@ jobs:
           echo "CONFIG_TMPFS_XATTR=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
 
-      - name: Install pahole for BTF generation
+      - name: Install BTF build deps (pahole + libelf/zlib for resolve_btfids)
         if: matrix.features == 'wksu-susfs'
-        run: sudo apt-get update && sudo apt-get install -y dwarves
+        # CONFIG_DEBUG_INFO_BTF builds the host tool tools/bpf/resolve_btfids, which
+        # #includes <libelf.h> and links libelf+zlib. dwarves alone is not enough
+        # (the Maximize-Build-Space step can also strip pre-installed -dev headers).
+        run: sudo apt-get update && sudo apt-get install -y dwarves libelf-dev zlib1g-dev
 
       - name: Configure TLSGhost Build-T tracing (BTF + uprobe + ftrace)
         shell: bash
