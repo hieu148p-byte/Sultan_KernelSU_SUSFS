@@ -171,7 +171,6 @@ jobs:
           CONFIG_BPF_SYSCALL=y
           CONFIG_BPF_EVENTS=y
           CONFIG_BPF_JIT=y
-          CONFIG_DEBUG_FS=y
           EOF
 
       - name: Configure Networking
