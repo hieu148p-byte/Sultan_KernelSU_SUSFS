@@ -167,10 +167,14 @@ jobs:
           CONFIG_WERROR=n
           CONFIG_FTRACE=y
           CONFIG_TRACING=y
-          CONFIG_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
           CONFIG_UPROBES=y
           CONFIG_UPROBE_EVENTS=y
+          # KPROBES deliberately OFF (build #7): build #6 (FTRACE+UPROBE+KPROBES) booted
+          # the kernel but PANICKED at the first->second-stage init handoff
+          # (execv("/system/bin/init")=ENOENT, right after ksu_handle_execveat_sucompat).
+          # Hypothesis: with CONFIG_KPROBES available, KSU-Next installs kprobe-based
+          # syscall hooks ON TOP OF the susfs manual hooks -> double execve handling.
+          # uprobe is independent of kprobe, so dropping KPROBES keeps the goal intact.
           # DELIBERATELY NOT SET (each breaks the vmlinux link with the GCC 14.2 cross
           # toolchain, which this GKI/Clang kernel was never meant to use, and NONE are
           # needed for userspace uprobe-by-offset):
@@ -286,7 +290,7 @@ jobs:
             -e FTRACE \
             -d FUNCTION_TRACER -d DYNAMIC_FTRACE -d FTRACE_SYSCALLS \
             -d FUNCTION_GRAPH_TRACER -d FTRACE_MCOUNT_RECORD \
-            -e KPROBES -e KPROBE_EVENTS -e UPROBES -e UPROBE_EVENTS \
+            -d KPROBES -d KPROBE_EVENTS -e UPROBES -e UPROBE_EVENTS \
             -d DEBUG_INFO_BTF -d DEBUG_INFO_BTF_MODULES
           $MK olddefconfig
 
@@ -319,6 +323,18 @@ jobs:
 
           # 5) Build
           $MK LOCALVERSION_AUTO=0 -j$(nproc --all)
+
+          # Capture the REAL resolved .config as ground truth (the in-kernel IKCONFIG
+          # snapshot is stale on this Sultan build — it claims TRACING=y on a kernel that
+          # has no tracefs at runtime, so extract-ikconfig cannot be trusted).
+          cp "$KCONF" "$GITHUB_WORKSPACE/built-real.config" || true
+
+      - name: Upload real .config
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: builtconfig-${{ inputs.codename }}-${{ matrix.features }}
+          path: built-real.config
 
       - name: Copy Images
         run: |
