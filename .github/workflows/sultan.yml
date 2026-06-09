@@ -121,6 +121,26 @@ jobs:
           cp ${{ github.workspace }}/kernel_patches/wild/archived/ksun-293ca01-susfs-v2.1.0-a14-6.1-ef16cbce.patch ./
           patch -p1 < ksun-293ca01-susfs-v2.1.0-a14-6.1-ef16cbce.patch
 
+      - name: TLSGhost - make KSU sucompat hook survive CONFIG_TRACING
+        if: matrix.features == 'wksu-susfs'
+        shell: bash
+        run: |
+          cd "$CONFIG/KernelSU-Next"
+          SC=kernel/feature/sucompat.c
+          # ROOT CAUSE (builds #5-#7): ksu_handle_execveat_ksud always returns 0, so the
+          # dispatch ALWAYS falls through to ksu_handle_execveat_sucompat, which rewrites
+          # filename->name to KSUD_PATH ("su found"). With CONFIG_TRACING on, the manual
+          # hook's argv is wrong so ksud's check_argv("second_stage") fails to log/setup,
+          # and sucompat mangles the FIRST-stage init's exec of /system/bin/init ->
+          # execv ENOENT -> "Attempted to kill init" panic. boot_b never mangles init.
+          # FIX: never su-mangle the /system/bin/init exec (match boot_b behaviour).
+          perl -0pi -e 's{memcpy\(\(void \*\)filename->name, ksud_path, sizeof\(ksud_path\)\);}{if (!strncmp(filename->name, "/system/bin/init", 16)) return 0; /* TLSGhost: do not su-mangle init exec */\n\tmemcpy((void *)filename->name, ksud_path, sizeof(ksud_path));}' "$SC"
+          if grep -q 'TLSGhost: do not su-mangle init exec' "$SC"; then
+            echo "OK: sucompat init guard applied"
+          else
+            echo "::error::sucompat init guard did NOT apply (memcpy target not found — patch format changed)"; exit 1
+          fi
+
       - name: Configure KernelSU
         if: contains(matrix.features, 'wksu')
         run: |
