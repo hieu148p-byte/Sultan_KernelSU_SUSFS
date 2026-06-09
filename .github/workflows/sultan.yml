@@ -249,10 +249,12 @@ jobs:
           cd "$CONFIG"
 
           echo "Running sed commands..."
-          # Build-T marker: distinct LOCALVERSION so /proc/config.gz + the early dmesg
-          # banner PROVE the trace kernel booted (susfs set_uname can re-spoof the syscall
-          # back to -Sultan-Wild for RASP, but the built-in config string can't be hidden).
-          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild-T"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
+          # Keep LOCALVERSION EXACTLY "-Sultan-Wild" (the value the prior trace kernel booted
+          # with). A "-Sultan-Wild-T" marker (build #5) changed UTS_RELEASE and the device
+          # then panicked at the first->second-stage handoff: execv("/system/bin/init")
+          # ENOENT (init exit 127). The early dmesg banner's build timestamp already
+          # distinguishes our kernel from the stock boot_b, so no version marker is needed.
+          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild"/' ./arch/arm64/configs/${{ inputs.codename }}_defconfig
 
           sed -i '/echo "+"$/d' scripts/setlocalversion
 
